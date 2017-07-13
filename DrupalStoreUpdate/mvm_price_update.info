@@ -1,0 +1,5 @@
+; $Id$
+name = MVM Price Update
+description = Imports product prices from a CoPOS tab delimited output and updates prices in UC
+core = 6.x
+package = Other

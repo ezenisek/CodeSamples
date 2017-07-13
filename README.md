@@ -35,3 +35,10 @@ configurable amount of time.  Once it has been successfully downloaded or the
 timer runs out, it is removed from the system and a notification is sent to the 
 uploader.  This allows users to transfer files in a more secure way than 
 dropbox.
+
+### Drupal Store Update
+This is a module I wrote for a local grocer that used a Drupal site for online
+shopping.  They had a person dedicated to reading excel spreadsheets and 
+updating the website manually twice a month with sales.  This module automates
+that process.  It does the work of a full time employee, and the person doing 
+the job manually was able to do the job they were hired for instead.

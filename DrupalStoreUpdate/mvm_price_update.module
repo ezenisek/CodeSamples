@@ -1,0 +1,651 @@
+<?php
+/**
+ * @file
+ * Main MVM Price Update Module File
+ *
+ */
+
+/**
+ * Implementation of hook_menu()
+ */
+
+function mvm_price_update_menu() {
+  $items['admin/settings/mvm_price_update'] = array(
+      'title' => 'MVM Price Update',
+      'description' => 'Add price updates and set upate options',
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('mvm_price_update_admin_settings'),
+      'access arguments' => array('administer site configuration'),
+      'type' => MENU_NORMAL_ITEM,
+      'file' => 'mvm_price_update.admin.inc',
+  );
+  $items['admin/store/mvm_price_update'] = array(
+      'title' => 'MVM Price Update',
+      'description' => 'Add price updates and set upate options',
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('mvm_price_update_admin_settings'),
+      'access arguments' => array('administer site configuration'),
+      'type' => MENU_NORMAL_ITEM,
+      'file' => 'mvm_price_update.admin.inc',
+  );
+  return $items;
+}
+
+function _mvm_price_update_do_batch($cron = false) {
+	// Before we start we load the price updater user
+	global $user;
+    $current_user = $user;
+    $user = user_load(array('name' => 'PriceUpdater'));
+
+	$batch = array(
+    'operations' => array(
+      array('_mvm_price_update_batch_get_products', array()),
+      array('_mvm_price_update_batch_parse_itemfile', array()),
+      array('_mvm_price_update_batch_parse_pricefile', array()),
+      array('_mvm_price_update_batch_merge_data', array()),
+      array('_mvm_price_update_batch_do_update', array()),
+      array('_mvm_price_update_batch_add_new',array()),
+      ),
+    'finished' => '_mvm_price_update_batch_finished',
+    'title' => t('Processing Price Updates'),
+    'init_message' => t('Price Updates Starting...'),
+    'progress_message' => t('Completed operation @current out of @total.'),
+    'error_message' => t('Price updates has encountered an error.'),
+    'file' => drupal_get_path('module', 'mvm_price_update') . '/mvm_price_update.module',
+  );
+  batch_set($batch);
+  $batch =& batch_get();
+  if($cron)
+  	$batch['progressive'] = false;
+  	
+  // Set the user back	
+  $user = $current_user;
+ }
+
+function _mvm_price_update_batch_get_products(&$context) {
+  // Start by getting the nid and item code of every item in the website
+  // excpet those items which are restricted by a web-only flag
+  $fid = 9;
+  $query = "SELECT p.nid, p.field_itemcode_value, n.status FROM " .
+  		"content_type_product p, node n WHERE n.nid = p.nid AND n.nid NOT IN " .
+  		"(SELECT content_id FROM flag_content WHERE content_type = 'node' AND fid = '$fid')";
+  $result = db_query($query);
+  $nids = array();
+  $codes = array();
+  while ($obj = db_fetch_object($result)) {
+  	if(in_array($obj->field_itemcode_value,$codes)) {
+  		$nid = $obj-nid;
+  		$code = $obj->field_itemcode_value;
+  		watchdog('MVM_Price_Update',"Duplicate SKU found in database. Node $nid, SKU:$code",null); 	
+  	}
+  	$codes[] = $obj->field_itemcode_value;
+    $nids[$obj->nid]['code'] = $obj->field_itemcode_value;
+    $nids[$obj->nid]['status'] = $obj->status;
+    $nids[$obj->nid]['stock'] = $obj->stock;
+  }
+  $context['results']['nids'] = $nids;
+  $context['message'] = t('Loaded website products for comparison... now getting new item data.');
+}
+
+function _mvm_price_update_batch_parse_itemfile(&$context) {
+  $file = file_directory_path().'/mvm_price_update/items.txt';
+  if(!file_exists($file))
+   {
+   	  $error_operation = reset($context['operations']);
+      $message = t('Could not load the items file due to a file error.  The file may be missing or corrupted.');
+      drupal_set_message($message, 'error');
+   }
+  $contents = file($file);
+  $records = count($contents);
+  $delimiter = "\t";
+  // Columns is a list of the columns we want to keep.  We ignore all the rest
+  $columns = array(
+      'UPC/PLU',
+      'Department #',
+      'Description',
+      'Brand Code',
+      'Category Code',
+      'SKU',
+      'Unit Cost',
+      'SRP',
+      'Qty/Case',
+      'Item Units',
+      'Random Wt Flag (Y/N)',
+      'EBT Eligible (Y/N)',
+      'Discountable Flag (Y/N)',
+      'Taxable (Y/N)',
+      'Active (Y/N)'
+  );
+  // Type keys match the spreadsheet, values match the website taxonomy
+  $types = array(
+      'DF' => 'Dairy-Free',
+      'FT' => 'Fair-Trade',
+      'GF' => 'Gluten-Free',
+      'LOCAL' => 'Local',
+      'LS' => 'Low-Salt',
+      'NF' => 'Nut-Free',
+      'V' => 'Vegan',
+      'VG' => 'Vegitarian',
+      'OG' => 'Organic',
+      'WF' => 'Wheat-Free'
+  );
+  $important_data = array();
+  $parseddata = array();
+  foreach($contents as $rownum => $row)
+  {
+    $data = explode($delimiter,$row);
+    if($rownum === 0) {
+      // This is the header row, we need to discover the locations of the
+      // columns we care about.
+      foreach($data as $colnumber => $col)
+      {
+        $col = trim($col);
+        if(in_array($col,$columns))
+          $important_data[$col] = $colnumber;
+      }
+    }
+    else {
+      // Now we deal with all the data.  There's lots of massaging we need to do, so let's get to it.
+      // First, we only want active items.
+      if(isset($data[$important_data['Active (Y/N)']]) && $data[$important_data['Active (Y/N)']] == 'Y' && $data[$important_data['Category Code']] != 'NFW') { // Only list active rows
+        foreach($important_data as $col => $colnumber)
+        {
+          $value = $data[$colnumber];
+
+          // If the column is the UPC/PLU or the SKU, we can only have numbers
+          if($col == 'UPC/PLU' || $col == 'SKU') {
+            $value = preg_replace("/[^0-9]/","",$value);
+            $data[$important_data[$col]] = $value;
+          }
+
+          // If the column is the category code, we use the types array to reassign it
+          if($col == 'Category Code') {
+            if(isset($types[$value]))
+              $value = $types[$value];
+          }
+          $parsedata[$data[$important_data['UPC/PLU']]][$col] = $value;
+        }
+      }
+      //We're done with this row, so free up some memory
+      unset($contents[$rownum]);
+    }
+  }
+  $context['results']['idata'] = $parsedata;
+  $context['message'] = t('Item data loaded... getting sale price data.');
+}
+
+function _mvm_price_update_batch_parse_pricefile(&$context) {
+  $file = file_directory_path().'/mvm_price_update/prices.txt';
+  if(!file_exists($file))
+   {
+   	  $error_operation = reset($context['operations']);
+      $message = t('Could not load the price file due to a file error.  The file may be missing or corrupted.');
+      drupal_set_message($message, 'error');
+   }
+  $contents = file($file);
+  $records = count($contents);
+  $delimiter = "\t";
+  // Columns is a list of the columns we want to keep.  We ignore all the rest
+  $columns = array(
+      'Item Code',
+      'SKU',
+      'Sale Price',
+      'Sale Start Date',
+      'Sale End Date',
+      'Member Only (Y/N)'
+  );
+  $important_data = array();
+  $parseddata = array();
+  foreach($contents as $rownum => $row)
+  {
+    $data = explode($delimiter,$row);
+    if($rownum === 0) {
+      // This is the header row, we need to discover the locations of the
+      // columns we care about.
+      foreach($data as $colnumber => $col)
+      {
+        $col = trim($col);
+        if(in_array($col,$columns))
+          $important_data[$col] = $colnumber;
+      }
+    }
+    foreach($important_data as $col => $colnumber) {
+      $value = $data[$colnumber];
+      // If the column is the Item Code or the SKU, we can only have numbers
+      if($col == 'Item Code' || $col == 'SKU') {
+        $value = preg_replace("/[^0-9]/","",$value);
+        $data[$important_data[$col]] = $value;
+      }
+      $parsedata[$data[$important_data['Item Code']]][$col] = $value;
+    }
+    //We're done with this row, so free up some memory
+    unset($contents[$rownum]);
+  }
+  $context['results']['pdata'] = $parsedata;
+  $context['message'] = t('Sale price data loaded... running data merge.');
+}
+
+function _mvm_price_update_batch_merge_data(&$context) {
+  // Combine the information into one dataset, but only if the sale is current.
+  // It's considered current if there is no start date or end date, or if the
+  // current time is between the start and end dates.
+  $pdata = $context['results']['pdata'];
+  $idata = $context['results']['idata'];
+  // First we have to do some crazy stuff with the key.  The item file often has
+  // a leading zero on the item code, but the price file does not.  The website 
+  // DOES, so we can't just drop it.  Insane, I know, but that's how things are.
+  // We need to add a zero and see if it's there.  If it is, then we 
+  // add a zero to the price key and away we go.
+  foreach($pdata as $key=>$row) {
+    if(array_key_exists('0'.$key,$idata)) {
+    	// This item with a leading zero exists in the item file
+    	// add the zero to the price key.
+    	$pdata['0'.$key] = $row;
+    	unset($pdata[$key]);	
+    }
+  }
+
+  $s = count($pdata);
+  $now = time();
+  $outsidedate = 0;
+  $insidedate = 0;
+  $nodate = 0;
+  foreach($idata as $key=>$row) {  	
+    if(array_key_exists($key,$pdata)) {
+      $start = $pdata[$key]['Sale Start Date'];
+      $end = $pdata[$key]['Sale End Date'];
+      $monly = strtoupper(trim($pdata[$key]['Member Only (Y/N)']));
+      if(!empty($start) && !empty($end)) { 
+        if(strtotime($start) < $now && strtotime($end) > $now) {
+          foreach($pdata[$key] as $col=>$val) {
+            $idata[$key][$col] = $val;
+            unset($pdata[$key]);
+          }
+          $insidedate++;
+          if($monly == 'Y') {
+          	// This is a currently active member sale
+          	$idata[$key]['Promo'] = '1638';
+          }
+          else {
+          	// This is a Co-Op Deal
+          	$idata[$key]['Promo'] = '80';
+          }
+        }
+        else
+        {
+          $outsidedate++;
+          // This is a regular price item
+          $idata[$key]['Promo'] = '1733';
+        }
+      }
+      else {
+        foreach($pdata[$key] as $col=>$val) {
+          $idata[$key][$col] = $val;
+          unset($pdata[$key]);
+        }
+        $nodate++;
+        // This is a Clearance Item
+        $idata[$key]['Promo'] = '2015';
+      }
+    }
+    // If this is an EDLP, that superceedes anything else.
+    if($idata[$key]['Category Code'] == 'EDLP') {
+    	// This is an Everyday Low Price item
+    	$idata[$key]['Promo'] = '82';	
+    }
+    // If we've gone through all this and still don't have a promo, it's regular price
+    if(!isset($idata[$key]['Promo'])) {
+    	$idata[$key]['Promo'] = '1733';	
+    }
+  }
+
+  // Notify if we're skipping out of date sales and tell how many are being udpated
+  if($outsidedate) {
+    $m = " $outsidedate item sales marked as regular price because today doesn't fall within the start and end dates.";
+    $context['results']['pdatamessage'] .= $m;
+  }
+  if($insidedate) {
+    $m = " $insidedate item sales were valid because today falls within the start and end dates.";
+    $context['results']['pdatamessage'] .= $m;
+  }
+  if($nodate) {
+    $m = " $nodate item sales were clearanced because they had no start or end dates.";
+    $context['results']['pdatamessage'] .= $m;
+  }
+
+  //If there are any items in pdata left over, there was a mismatch somewhere
+  if($c = count($pdata)) {
+    $m = " $c out of $s sale price(s) unapplied due to inactive or unstocked items on the sale sheet.";
+    $context['results']['pdatamessage'] .= $m;
+  }
+$context['results']['data'] = $idata;
+$context['message'] = t('Data merge complete... running price updates.');
+}
+
+function _mvm_price_update_batch_do_update(&$context) {
+  // Now for the fun part.  We need to go through every item and see if
+  // it exists in our data.  If it does, update it.  If not, unpublish it.
+  // Once that's done we can remove that row from the data array.
+  // Then, we need to go through the data leftovers and add them as new
+  // items.
+  $nids = $context['results']['nids'];
+  $data = $context['results']['data'];
+  if (!isset($context['sandbox']['progress'])) {
+    $context['sandbox']['progress'] = 0;
+    $context['sandbox']['updated'] = array();
+    $context['sandbox']['unpublished'] = array();
+    $context['sandbox']['republished'] = array();
+    $context['sandbox']['ignored'] = array();
+    $context['sandbox']['current_node'] = 0;
+    $context['sandbox']['max'] = count($nids);
+  }
+  $limit = 250;
+  $nids = array_slice($nids,0,$limit,true);
+  foreach($nids as $nid => $info) {
+  	$context['current_node'] = $nid;
+    if(array_key_exists($info['code'],$data)) {
+      if(_mvm_price_update_product_update($data[$info['code']],$nid)) {
+      	if($info['status'])
+      		$context['sandbox']['updated'][] = 'Updated product '.$info['code']." (nid $nid)\n";
+      	else
+      		$context['sandbox']['updated'][] = 'Updated an unpublished product '.$info['code']." (nid $nid)\n";
+      }
+      else
+      	$context['sandbox']['updated'][] = 'Ignored product '.$info['code']." (nid $nid)\n";
+      unset($context['results']['data'][$info['code']]);
+    }
+    elseif($info['status']) {  // Only discontinue if currently published
+      // The product does NOT exist on the spreadsheet (is inactive or gone)
+      _mvm_price_update_product_discontinue($nid);
+      $context['sandbox']['unpublished'][] = 'Unpublished product '.$info['code']." (nid $nid)\n";
+    }
+    else {  // We ignore it
+      $context['sandbox']['ignored'][] = 'Ignored product '.$info['code']." (nid $nid)\n";
+    }
+  	$context['sandbox']['progress']++;
+  	unset($context['results']['nids'][$nid]);
+  }
+  $message = "Processing updates in chunks of $limit... Completed ".$context['sandbox']['progress'].' out of '.$context['sandbox']['max'].' products.';
+  $context['message'] = t($message);
+  if($context['sandbox']['progress'] != $context['sandbox']['max']) {
+   	 $context['finished'] = $context['sandbox']['progress'] / $context['sandbox']['max'];
+  }
+  else {
+  	// Done, set up results
+  	$context['results']['updated'] = $context['sandbox']['updated'];
+    $context['results']['unpublished'] = $context['sandbox']['unpublished'];
+    $context['results']['ignored'] = $context['sandbox']['ignored'];
+    $context['results']['republished'] = $context['sandbox']['republished'];
+    $context['message'] = t('Price updates complete... adding new products.');
+  }
+}
+
+function _mvm_price_update_batch_add_new(&$context) {
+   $newproducts = $context['results']['data'];  //Leftovers
+   if (!isset($context['sandbox']['progress'])) {
+    $context['sandbox']['progress'] = 0;
+    $context['sandbox']['added'] = array();
+    $context['sandbox']['max'] = count($newproducts);
+   }
+   $limit = 100;
+   $newproducts = array_slice($newproducts,0,$limit,true);
+   foreach($newproducts as $code => $row) {
+    _mvm_price_update_product_update($row);
+    $context['sandbox']['added'][] = 'Added product '.$code."\n";
+    unset($context['results']['data'][$code]);
+    $context['sandbox']['progress']++;
+  }
+  $message = "Processing new items in chunks of $limit... Completed " .$context['sandbox']['progress'].' out of '.$context['sandbox']['max'].' products.';
+  $context['message'] = t($message);
+  if($context['sandbox']['progress'] != $context['sandbox']['max']) {
+    $context['finished'] = $context['sandbox']['progress'] / $context['sandbox']['max'];
+    //$m = "\nBatch Complete.  Starting next batch.\n";
+    //$context['sandbox']['added'][] = $m;
+  }
+   else {
+   	// Done, set up results
+  	$context['results']['added'] = $context['sandbox']['added'];
+  	$context['message'] = t('New products added... generating reports.');
+   }
+}
+
+function _mvm_price_update_batch_finished($success,$results,$operations) {
+	if($success) {
+	  $reportlocation =  file_directory_path().'/mvm_price_update/';
+      $addreport = 'added.txt';
+      $updatedreport = 'updated.txt';
+      $unpublishedreport = 'unpublished.txt';
+      $republishedreport = 'republished.txt';
+      $ignoredreport = 'ignored.txt';
+      $updated = $results['updated'];
+      $added = $results['added'];
+      $unpublished = $results['unpublished'];
+      $ignored = $results['ignored'];
+      $republished = $results['republished'];
+      $output .= 'Updated '.count($updated).' produtcs, unpublished '.count($unpublished).' products'.
+      ', republished '.count($republished).' products, and added '.count($added).' products.  '.
+      count($ignored).' products were ignored.'."\n";
+	  $output .= $results['pdatamessage'];
+	  drupal_set_message(t(nl2br($output)));
+	  if(file_put_contents($reportlocation.$updatedreport,$updated))
+	    drupal_set_message(l('Updated Items Report',$reportlocation.$updatedreport));
+	  if(file_put_contents($reportlocation.$unpublishedreport,$unpublished))
+	    drupal_set_message(l('Unpublished Items Report',$reportlocation.$unpublishedreport));
+	  if(file_put_contents($reportlocation.$republishedreport,$republished))
+	    drupal_set_message(l('Republished Items Report',$reportlocation.$republishedreport));
+	  if(file_put_contents($reportlocation.$addreport,$added))
+	    drupal_set_message(l('Added Items Report',$reportlocation.$addreport));
+	  if(file_put_contents($reportlocation.$ignoredreport,$ignored))
+	    drupal_set_message(l('Ignored Items Report',$reportlocation.$ignoredreport));
+	}
+	else {
+	  $error_operation = reset($operations);
+      $message = t('An error occurred while processing %error_operation with arguments: @arguments', array('%error_operation' => $error_operation[0], '@arguments' => print_r($error_operation[1], TRUE)));
+      drupal_set_message($message, 'error');
+	}
+}
+
+function _mvm_price_update_product_update($row,$nid = 'new'){
+  // Are we updating or adding?
+  if($nid == 'new'){
+    $node = new stdClass();
+    $node->name = $row['Description'];
+    $node->title = $node->name;
+    $node->body = $node->name;
+    $node->teaser = $node->name;
+    $node->log = 'Imported by MVM Price Update';
+
+    // This next bit about the photo is just awful, but it gives us the result
+    // I'm stealing the info from a random product I found
+    $node->picture = 'sites/default/files/pictures/picture-1.jpg';
+    $node->field_image_cache[0]['fid'] = 128592;
+    $node->field_image_cache[0]['uid'] = 13;
+    $node->field_image_cache[0]['filemime'] = 'image/jpeg';
+    $node->field_image_cache[0]['filesize'] = 291117;
+    $node->field_image_cache[0]['filename'] = 'nopho.jpg';
+    $node->field_image_cache[0]['filepath'] = 'sites/default/files/nopho_613.jpg';
+    $node->field_image_cache[0]['status'] = 1;
+
+    $node->field_itemcode[0]['value'] = $row['UPC/PLU'];
+    $node->field_posdescription[0]['value'] = $row['Description'];
+    $node->field_posbrandname[0]['value'] = $row['Brand Code'];
+    $node->model = $row['UPC/PLU'];
+    $node->type = 'product'; //This can be any node type
+    $node->created = time();
+    $node->changed = $node->created;
+    $node->promote = 0; // Display on front page ? 1 : 0
+    $node->sticky = 0;  // Display top of page ? 1 : 0
+    $node->format = 2;  // 1:Filtered HTML, 2: Full HTML
+    $node->status = 0;   // Published ? 1 : 0
+    $node->language = 'en';
+    $node->list_price = $row['SRP'];
+    $node->cost = $row['Unit Cost'];
+    $node->pkg_qty = $row['Qty/Case'];
+
+    // Figure out our department
+    $dept = $row['Department #'];
+    // What follows is a department map.  If departments change, this needs to be updated.
+    $depts = array(
+    1=>4, // Grocery
+    2=>27, // Refrigerated
+    3=>8, // Dairy
+    4=>10, // Deli
+    5=>28, // Bread
+    6=>29, // Frozen
+    7=>30, // Meat & Fish
+    8=>31, // Health & Beauty
+    9=>32, // Vitamins
+    10=>33, // Herbs (Bulk)
+    11=>34, // Produce
+    12=>35, // Bulk
+    13=>11, // Household
+    14=>36, // Books & Mags
+    15=>40 ); // General
+    node_add_term($node,3,$depts[$dept]); // 3 = Catalog
+  }
+  else {
+    $node = node_load($nid);
+
+    // If we don't need updating, return (1733 = regular price)
+    if($node->list_price == $row['SRP'] && $node->status == 1 && $row['Promo'] == '1733' && empty($node->sell_price))
+    	return false;
+  }
+
+  // We need to deal with taxonomy.  There are two seperate taxonomy vocabs
+  // to deal with, the promo type and the category.  The promo type needs to
+  // be exaclty the terms we want an no other terms... it will depend on the
+  // parsing and sale price checking we've already done.  The category vocab
+  // just needs to have terms we found on the spreadsheet added, but nothing
+  // deleted from what already exists.
+
+  $pvid = 11;  //If the vid ever changes it will need to be edited here
+  $tvid = 10;  //If the vid ever changes it will need to be edited here
+
+  foreach($node->taxonomy as $id => $tax) {
+    if($tax->vid == $pvid && $tax->tid != 81)
+      unset($node->taxonomy[$id]);
+  }
+
+  // Setting up an array of terms to add and adding our promo term
+  $promoterm = taxonomy_get_term($row['Promo']);
+  $pterms = array($promoterm->tid);
+  $tterms = array();
+
+  // Now we can set the rest if it exists
+  if(!empty($row['Category Code']))
+  {
+    $typeterm = taxonomy_get_term_by_name($row['Category Code']);
+    $tterms[] = $typeterm[0]->tid;
+  }
+
+  // Set prices
+  // Get the roles for price per role
+  $anon = 1; $auth = 2; $member = 3;  // If roles ever change, these ids need to be updated
+  $node->list_price = $row['SRP'];
+  $promo = $row['Promo'];
+  
+  // Member Sale (1638)
+  if($promo == '1638') {
+    // Member only sale
+    $node->sell_price = $row['SRP'];
+    $node->role_prices[$anon] = '';
+    $node->role_prices[$auth] = '';
+    if(empty($row['Sale Price']))
+    	$row['Sale Price'] = $row['SRP'];
+    $node->role_prices[$member] = $row['Sale Price'];
+  }
+  // Co-Op Deal (80)
+  elseif($promo == '80') {
+  	if(empty($row['Sale Price']))
+    	$row['Sale Price'] = $row['SRP'];
+    $node->sell_price = $row['Sale Price'];
+    $node->role_prices[$anon] = '';
+    $node->role_prices[$auth] = '';
+    $node->role_prices[$member] = '';
+  }
+  // EDLP (82)
+  elseif($promo == '82') {
+  	if(empty($row['Sale Price']))
+    	$row['Sale Price'] = $row['SRP'];
+    $node->sell_price = $row['Sale Price'];
+    $node->role_prices[$anon] = '';
+    $node->role_prices[$auth] = '';
+    $node->role_prices[$member] = '';
+  }
+  // Clearance (2015)
+  elseif($promo == '2015') {
+  	if(empty($row['Sale Price']))
+    	$row['Sale Price'] = $row['SRP'];
+  	$node->sell_price = $row['Sale Price'];
+    $node->role_prices[$anon] = '';
+    $node->role_prices[$auth] = '';
+    $node->role_prices[$member] = '';
+  }
+  // Regular Priced Item (1733)
+  else {
+    $node->sell_price = $row['SRP'];
+    $node->role_prices[$anon] = '';
+    $node->role_prices[$auth] = '';
+    $node->role_prices[$member] = '';
+  }
+  
+  // If it's a new product, we so some special stuff
+  if ($nid == 'new') {
+    $typeterm = taxonomy_get_term('81'); //81
+    $tterms[] = $typeterm->tid;
+    $node->sku = $row['UPC/PLU'];
+    
+    //The following line adds the item to the 
+    //product record status taxonomy vocab as a new product
+    node_add_term($node,18,2038);
+  }
+
+  foreach($pterms as $tid) {
+    node_add_term($node,$pvid,$tid);
+  }
+  foreach($tterms as $tid) {
+    node_add_term($node,$tvid,$tid);
+  }
+
+  if ($node = node_submit($node)) {
+    node_save($node);
+    return true;
+  }
+  else
+  	drupal_set_message("Node $nid could not be saved".'error');
+}
+
+function _mvm_price_update_product_discontinue($nid){
+  // For now, discontinuing something simply unpublishes it
+  $node = node_load($nid);
+  $node->status = 0;   // Published ? 1 : 0
+  node_save($node);
+  return true;
+}
+
+function node_add_term(&$node,$vid,$tid) {
+  # Check if $node->taxonomy is an array of objects or simple values
+  $keys=array_keys($node->taxonomy);
+  $objectMode=is_object($node->taxonomy[$keys[0]]);
+
+  if ($objectMode) {
+    if (!isset($node->taxonomy[$tid])) {
+      $node->taxonomy[$tid]=new stdClass();
+      $node->taxonomy[$tid]->tid=$tid;
+      $node->taxonomy[$tid]->vid=$vid;
+    }
+  } else {
+    $node->taxonomy[$vid][$tid]=$tid;
+  }
+}
+
+function mvm_price_update_cron() {
+	if(variable_get('mvm_price_update_cron', 'No') == 'Yes') {
+		$now = time();
+		$runtime = variable_get('mvm_price_update_runtime','0');
+		if($runtime != 0 && $now > strtotime($runtime)) {
+			//_mvm_price_update_do_batch(true);
+			variable_set('mvm_price_update_runtime',0);
+		}
+	}
+}
