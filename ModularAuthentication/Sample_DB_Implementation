@@ -1,0 +1,22 @@
+#Sample Database Implementation (MySQL)
+CREATE TABLE `auth_sources` (
+  `auth_id` int(11) NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) NOT NULL,
+  `type` varchar(255) NOT NULL,
+  `config_values` text NOT NULL,
+  `autoallow` tinyint(1) NOT NULL DEFAULT '0',
+  `description` text,
+  `active` tinyint(1) NOT NULL DEFAULT '1',
+  PRIMARY KEY (`auth_id`),
+  UNIQUE KEY `name_UNIQUE` (`name`)
+) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8;
+
+#Sample local authentication table (MySQL)
+CREATE TABLE `auth_local` (
+  `user_id` int(11) NOT NULL,
+  `password` varchar(255) NOT NULL,
+  `token` varchar(255) DEFAULT '0',
+  `last_set` datetime NOT NULL,
+  PRIMARY KEY (`user_id`),
+  UNIQUE KEY `user_id_UNIQUE` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
