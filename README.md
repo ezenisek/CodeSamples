@@ -27,6 +27,13 @@ In order to enable a new type of authentication such as OAuth or Google Sign-in,
 a new class with the specifics for that type of login can be written and plugged
 in.
 
+### jQuery Pop Note
+A for fun project that turned into a useful feature for Meastro, Pop Note is a 
+jQuery plug-in that, along with the proper server side code, allows a user to 
+create a virtual post-it note on the screen where they can write comments or 
+thoughts.  The note is persistent, so it stays where it's put across sessions,
+and it can be shared with other users.
+
 ### LIFT (Limited Instant File Transfer)
 This is a module I developed for Drupal 7 to allow users to upload a file and
 notify someone that the file is available for download.  The module is built to
