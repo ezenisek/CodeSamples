@@ -53,3 +53,12 @@ that process.  It does the work of a full time employee, and the person doing
 the job manually was able to do the job they were hired for instead.
 
 ##**Media Samples**
+
+### ISPCS Videos
+In 2012 I was tasked with cutting together and producing a series of
+promotional videos for the International Symposium for Personal and Commercial
+Spaceflight by New Mexico Space Grant.  These are a couple of the videos I made.
+
+### Logos and Images
+This is just a sampling of some of the logo and image work I've done in my 
+career.
