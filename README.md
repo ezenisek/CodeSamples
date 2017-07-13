@@ -8,7 +8,7 @@ has been my main focus at NMSU since 2012, so many of my samples come from
 there.  It is an enterprise program for handling IRB approvals for research at 
 NMSU.*
 
-##**Code Samples**
+##Code Samples
 
 ### JS&CSS Compressor
 This is a snippit from Maestro which automatically combines and compresses all
@@ -52,7 +52,7 @@ updating the website manually twice a month with sales.  This module automates
 that process.  It does the work of a full time employee, and the person doing 
 the job manually was able to do the job they were hired for instead.
 
-##**Media Samples**
+##Media Samples
 
 ### ISPCS Videos
 In 2012 I was tasked with cutting together and producing a series of
