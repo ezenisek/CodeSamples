@@ -1,12 +1,14 @@
-# CodeSamples
+# My Portfolio
 This respository contains some samples of my work.  Please feel free to browse.
 If you have any questions or would like to use some of this code in your own
 work, please contact Ed Zenisek (ezenisek@gmail.com)
 
-*I will reference a project called Maestro in many of these samples.  Maestro
+*I will reference a project called Maestro in many of the code samples.  Maestro
 has been my main focus at NMSU since 2012, so many of my samples come from 
 there.  It is an enterprise program for handling IRB approvals for research at 
 NMSU.*
+
+##**Code Samples**
 
 ### JS&CSS Compressor
 This is a snippit from Maestro which automatically combines and compresses all
@@ -49,3 +51,5 @@ shopping.  They had a person dedicated to reading excel spreadsheets and
 updating the website manually twice a month with sales.  This module automates
 that process.  It does the work of a full time employee, and the person doing 
 the job manually was able to do the job they were hired for instead.
+
+##**Media Samples**
