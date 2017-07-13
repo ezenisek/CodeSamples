@@ -1,0 +1,7 @@
+name = LIFT
+description = Limited Instant File Transfer -Allows users to upload files for one-time or limited download to anyone via email link
+core = 7.x
+package = File Management
+configure = admin/config/content/lift
+dependencies[] = email
+dependencies[] = file

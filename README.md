@@ -6,13 +6,13 @@ work, please contact Ed Zenisek (ezenisek@gmail.com)
 *I will reference a project called Maestro in many of these samples.  Maestro
 has been my main focus at NMSU since 2012, so many of my samples come from 
 there.  It is an enterprise program for handling IRB approvals for research at 
-NMSU*
+NMSU.*
 
 ### JS&CSS Compressor
 This is a snippit from Maestro which automatically combines and compresses all
 Javascript and CSS code from the main program as well as additional plug-ins and
 3rd party programs.  Maestro has dozens of CSS and Javascript scripts included,
-and adding them all seperately as a page loads causes more traffic and slower
+and adding them all seperately during a page load causes more traffic and slower
 load times.  By combining them all together and then compressing them (using a 
 program called YUICompressor) the load can be cut to a single request for CSS 
 and a single request for JS.  It has the added benefit of munging the JS code, 
@@ -27,4 +27,11 @@ In order to enable a new type of authentication such as OAuth or Google Sign-in,
 a new class with the specifics for that type of login can be written and plugged
 in.
 
-
+### LIFT (Limited Instant File Transfer)
+This is a module I developed for Drupal 7 to allow users to upload a file and
+notify someone that the file is available for download.  The module is built to
+only allow the file to be downloaded a configurable number of times, and for a 
+configurable amount of time.  Once it has been successfully downloaded or the 
+timer runs out, it is removed from the system and a notification is sent to the 
+uploader.  This allows users to transfer files in a more secure way than 
+dropbox.

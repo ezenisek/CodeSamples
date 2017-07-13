@@ -1,0 +1,329 @@
+<?php
+/**
+ * @file
+ * Main callbacks for the LIFT Module
+ */
+
+/**
+ * Implements hook_help.
+ *
+ * Displays help and module information.
+ */
+function lift_help($path, $arg) {
+  switch ($path) {
+    case "admin/help#lift":
+      return '<p>' .  t("Help will go here") . '</p>';
+      break;
+  }
+}
+
+/**
+ * Implements hook_menu().
+ */
+function lift_menu() {
+  $items['admin/config/content/lift'] = array(
+      'title' => 'LIFT',
+      'description' => 'Change default settings for LIFT',
+      'page callback' => 'drupal_get_form',
+      'page arguments' => array('lift_admin_form'),
+      'access arguments' => array('access administration pages'),
+      'type' => MENU_NORMAL_ITEM,
+      'file' => 'lift.admin.inc',
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_form_alter().
+ */
+function lift_form_alter(&$form,&$form_state,$form_id)	{
+  if($form_id == 'lift_node_form') {
+    $form['field_lift_sunset']['und'][0]['value']['#default_value'] = variable_get('lift_sunset_time');
+    $form['field_lift_max_attempts']['und'][0]['value']['#default_value'] = variable_get('lift_max_attempts');
+    $form['field_lift_recipients']['und']['add_more']['#value'] = 'Add Another Recipient';
+    $form['field_lift_attempts']['#type'] = 'hidden';
+    $form['field_lift_code']['#type'] = 'hidden';
+    $loc = variable_get('lift_file_location');
+    $form['field_lift_file']['und'][0]['#upload_location'] = 'private://'.$loc;
+  }
+}
+
+/**
+ * Implements hook_node_presave().
+ */
+function lift_node_presave($node) {
+  if($node->type === 'lift' && $node->field_lift_code['und'][0]['value'] == '0')
+  {
+    $title = $node->title;
+    if(count($node->field_lift_recipients['und']) > 1)
+    {
+      foreach($node->field_lift_recipients['und'] as $key => $recip)
+      {
+        $email = $recip['email'];
+        $string = substr(str_shuffle("123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNPQRSTUVWXYZ"), 0, 10);
+        if($key > 0) {
+          $thisnode = clone($node);
+          unset($thisnode->field_lift_recipients['und']);
+          $thisnode->field_lift_recipients['und'][0] = $recip;
+          $thisnode->title = $title.' ('.$email.')';
+          $thisnode->field_lift_code['und'][0]['value'] = $string;
+          unset($thisnode->nid);
+          node_save($thisnode);
+          unset($node->field_lift_recipients['und'][$key]);
+        }
+        else
+        {
+          $node->title = $title.' ('.$email.')';
+          $node->field_lift_code['und'][0]['value'] = $string;
+        }
+      }
+    }
+    else
+    {
+      $email = $node->field_lift_recipients['und'][0]['email'];
+      $string = substr(str_shuffle("123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNPQRSTUVWXYZ"), 0, 15);
+      $node->title = $title.' ('.$email.')';
+      $node->field_lift_code['und'][0]['value'] = $string;
+    }
+  }
+}
+
+/**
+ * Implements hook_node_view().
+ */
+function lift_node_view($node,$view_mode) {
+  if($node->type === 'lift')
+  {
+    /* Figure out our timestamps.  This will be for both display and
+    to check if this file is allowed to be downloaded. */
+    $seconds = ($node->field_lift_sunset['und'][0]['value'])*60;
+    $starttime = $node->changed;
+    $endtime = $starttime + $seconds;
+    $now = time();
+    $elapsed = $now - $starttime;
+    $timeleft = $seconds - $elapsed;
+    if($timeleft < 0)
+      $timeleft = 0;
+    $node->content['field_lift_intro'] = array(
+        '#markup' => '<h3>LIFT File Details</h3>',
+        '#weight' => -100
+    );
+    $node->content['field_lift_filename'] = array(
+        '#markup' => '<strong>Filename:</strong> '.$node->field_lift_file['und'][0]['filename'],
+        '#weight' => -99
+    );
+    $remaining = $node->field_lift_max_attempts['und'][0]['value'] - $node->field_lift_attempts['und'][0]['value'];
+    $node->content['field_lift_downloadsleft'] = array(
+        '#markup' => '<br /><strong>Downloads Remaining:</strong> '.$remaining,
+        '#weight' => -98
+    );
+    if($timeleft)
+      $node->content['field_lift_timeleft'] = array(
+          '#markup' => '<br /><strong>Time Left:</strong> '.round($timeleft/60).' Minutes',
+          '#weight' => -97
+      );
+    else {
+      $node->content['field_lift_timeleft'] = array(
+          '#markup' => '<strong><em>This file has expired.  It will now be deleted.</em></strong>',
+          '#weight' => -97
+      );
+      // Delete this node.
+      node_delete($node->nid);
+    }
+
+    // Is the download code included with the URL?
+    $code = $node->field_lift_code['und'][0]['value'];
+    if(isset($_GET['code']) && $_GET['code'] == $code)
+    {
+      // Increment the file counter.
+      $node->field_lift_attempts['und'][0]['value']++;
+      node_save($node);
+      // Transfer the file.
+      if($node->field_lift_attempts['und'][0]['value'] <= $node->field_lift_max_attempts['und'][0]['value'])
+      {
+        $user = user_load($node->uid);
+        $to = $user->mail;
+        lift_mail_send('file_downloaded_owner',$to,$node);
+        $file = file_load($node->field_lift_file['und'][0]['fid']);
+        $headers = file_get_content_headers($file);
+        $headers['Content-Disposition'] = 'attachment; filename="'.$file->filename.'"';
+        $path = $node->field_lift_file['und'][0]['uri'];
+        file_transfer($path,$headers);
+      }
+      else
+      {
+        $node->content['field_lift_notify'] = array(
+            '#markup' => '<strong><em>This file has been downloaded the maximum number of times.  It has been deleted.</em></strong>',
+            '#weight' => 150
+        );
+
+        // Delete this node.
+        node_delete($node->nid);
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_node_insert().
+ */
+function lift_node_insert($node) {
+  if($node->type === 'lift') {
+    $email = $node->field_lift_recipients['und'][0]['email'];
+    lift_mail_send('file_added_recipient',$email,$node);
+  }
+}
+
+/**
+ * Implements hook_node_delete().
+ */
+function lift_node_delete($node) {
+  if($node->type === 'lift') {
+    $user = user_load($node->uid);
+    $email = $user->mail;
+    lift_mail_send('file_deleted_owner',$email,$node);
+  }
+}
+
+/**
+ * Implements hook_mail().
+ */
+function lift_mail($key, &$message, $node) {
+  global $user;
+  $options = array(
+      'langcode' => $message['language']->language,
+  );
+  $file = file_load($node->field_lift_file['und'][0]['fid']);
+  $seconds = ($node->field_lift_sunset['und'][0]['value'])*60;
+  $starttime = $node->changed;
+  $endtime = $starttime + $seconds;
+  $now = time();
+  $elapsed = $now - $starttime;
+  $timeleft = $seconds - $elapsed;
+  switch ($key) {
+    case 'file_added_owner':
+      $message['subject'] = t('A LIFT File has been added to @site-name', array('@site-name' => variable_get('site_name', 'the LIFT System')), $options);
+      // Note that the message body is an array, not a string.
+      $message['body'] = array(
+          'You have added a new file on '.variable_get('site_name', 'the LIFT System').'. Details are below.',
+          ' ',
+          'Title: '.$node->title,
+          'Description: '.strip_tags(render($node->body['und'][0]['value'])),
+          'Filename: '.$file->filename,
+          'Recipient: '.$node->field_lift_recipient['und'][0]['email'],
+          'Downloads Allowed: '.$node->field_lift_max_attempts['und'][0]['value'],
+          'Time Available: '.$node->field_lift_sunset['und'][0]['value'].' minutes',
+          'Download Code: '.$node->field_lift_code['und'][0]['value'],
+          'Download URL: '.url('node/'.$node->nid, array('absolute'=>TRUE)).'?code='.$node->field_lift_code['und'][0]['value'],
+      );
+      break;
+    case 'file_added_recipient':
+      $message['subject'] = t('A LIFT File for you has been added to @site-name', array('@site-name' => variable_get('site_name', 'the LIFT System')), $options);
+      $message['body'] = array(
+          'There is a file for you on '.variable_get('site_name', 'the LIFT System').'. Details are below.',
+          ' ',
+          'Title: '.$node->title,
+          'Description: '.strip_tags(render($node->body['und'][0]['value'])),
+          'Filename: '.$file->filename,
+          'Owner: '.$user->name,
+          'Downloads Allowed: '.$node->field_lift_max_attempts['und'][0]['value'],
+          'Time Available: '.$node->field_lift_sunset['und'][0]['value'].' minutes',
+          'Download Code: '.$node->field_lift_code['und'][0]['value'],
+          'Download URL: '.url('node/'.$node->nid, array('absolute'=>TRUE)).'?code='.$node->field_lift_code['und'][0]['value'],
+          ' ',
+          'Please use the download URL above to retrieve your file.  Also note that the file can only be downloaded '.$node->field_lift_max_attempts['und'][0]['value'].' time(s).',
+          'You have '.$node->field_lift_sunset['und'][0]['value'].' minutes from the time the file was posted until it expires. If you have any questions please contact '.$user->mail.'.',
+          ' ',
+          'Thank you.',
+      );
+      break;
+    case 'file_downloaded_owner':
+      $left = $node->field_lift_max_attempts['und'][0]['value'] - $node->field_lift_attempts['und'][0]['value'];
+      $message['subject'] = t('A LIFT File has been downloaded from @site-name', array('@site-name' => variable_get('site_name', 'the LIFT System')), $options);
+      $message['body'] = array(
+          'A file that you LIFTED has been downloaded by one of your recipients.',
+          ' ',
+          'Title: '.$node->title,
+          'Description: '.strip_tags(render($node->body['und'][0]['value'])),
+          'Filename: '.$file->filename,
+          'Recipient: '.$node->field_lift_recipients['und'][0]['email'],
+          ' ',
+          'Download attempt(s) remaining: '.$left,
+          'Time Remaining: '.round($timeleft/60).' minutes.',
+          ' ',
+          'Thank you.',
+      );
+      break;
+    case 'file_downloaded_recipient':
+
+      break;
+    case 'file_deleted_owner':
+      $left = $node->field_lift_max_attempts['und'][0]['value'] - $node->field_lift_attempts['und'][0]['value'];
+      $message['subject'] = t('A LIFT File has been deleted from @site-name', array('@site-name' => variable_get('site_name', 'the LIFT System')), $options);
+      $message['body'] = array(
+          'A file that you LIFTED has been deleted by the system.  It has either expired or the maximum download attempts has been reached.',
+          ' ',
+          'Title: '.$node->title,
+          'Description: '.strip_tags(render($node->body['und'][0]['value'])),
+          'Filename: '.$file->filename,
+          'Recipient: '.$node->field_lift_recipients['und'][0]['email'],
+          ' ',
+          'Download attempt(s) remaining: '.$left,
+          'Time Remaining: '.round($timeleft/60).' minutes.',
+          ' ',
+          'Thank you.',
+      );
+      break;
+    case 'file_deleted_recipient':
+
+      break;
+  }
+}
+
+/**
+ * Implements hook_mail_send().
+ */
+function lift_mail_send($key,$to,$node) {
+  // All system mails need to specify the module and template key (mirrored from
+  // hook_mail()) that the message they want to send comes from.
+  $module = 'lift';
+  // Specify 'to' and 'from' addresses.
+  $from = variable_get('site_mail', 'LIFT System');
+
+  $language = language_default();
+  $send = TRUE;
+
+  $result = drupal_mail($module, $key, $to, $language, $node, $from, $send);
+  if ($result['result'] == TRUE) {
+    drupal_set_message(t('An email message about this file has been sent.'));
+  }
+  else {
+    drupal_set_message(t('There was a problem sending an email message and it was not sent.'), 'error');
+  }
+}
+
+/**
+ * Implements hook_cron().
+ */
+function lift_cron() {
+  // get nid for all nodes of type lift
+  $results = db_query("SELECT nid, title FROM {node} WHERE type = :type", array(':type' => 'lift'));
+  foreach ($results as $record) {
+    $nid = $record->nid;
+    $node = node_load($nid);
+    // If the max attempts have been reached, we delete the file
+    if($node->field_lift_attempts['und'][0]['value'] >= $node->field_lift_max_attempts['und'][0]['value'])
+      node_delete($nid);
+    // If the sunset time is reached, we delete the file
+    $seconds = ($node->field_lift_sunset['und'][0]['value'])*60;
+    $starttime = $node->changed;
+    $endtime = $starttime + $seconds;
+    $now = time();
+    $elapsed = $now - $starttime;
+    $timeleft = $seconds - $elapsed;
+    if($timeleft < 0)
+      $timeleft = 0;
+    if(!$timeleft)
+      node_delete($nid);
+  }
+}
