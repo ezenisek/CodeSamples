@@ -18,6 +18,11 @@ program called YUICompressor) the load can be cut to a single request for CSS
 and a single request for JS.  It has the added benefit of munging the JS code, 
 making it harder to read by potential Script Kiddies.
 
+** Updated 8-14-2018 **
+I've updated the compressor to be a class instead of simply a script.  It
+should be easier to implement and maintain.  If you'd like to use it, you
+only need to download one of the two files... either the script or the class.
+
 ### Modular Authentication
 This set of classes allows Maestro to have multiple authentication sources.  In 
 this way, users from multiple locations can authenticate and login to use
