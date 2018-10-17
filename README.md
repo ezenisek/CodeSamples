@@ -8,6 +8,8 @@ has been my main focus at NMSU since 2012, so many of my samples come from
 there.  It is an enterprise program for handling IRB approvals for research at 
 NMSU.*
 
+##Code Samples
+
 ### JS&CSS Compressor
 This is a snippit from Maestro which automatically combines and compresses all
 Javascript and CSS code from the main program as well as additional plug-ins and
@@ -17,11 +19,6 @@ load times.  By combining them all together and then compressing them (using a
 program called YUICompressor) the load can be cut to a single request for CSS 
 and a single request for JS.  It has the added benefit of munging the JS code, 
 making it harder to read by potential Script Kiddies.
-
-** Updated 8-14-2018 **
-I've updated the compressor to be a class instead of simply a script.  It
-should be easier to implement and maintain.  If you'd like to use it, you
-only need to download one of the two files... either the script or the class.
 
 ### Modular Authentication
 This set of classes allows Maestro to have multiple authentication sources.  In 
@@ -54,6 +51,16 @@ shopping.  They had a person dedicated to reading excel spreadsheets and
 updating the website manually twice a month with sales.  This module automates
 that process.  It does the work of a full time employee, and the person doing 
 the job manually was able to do the job they were hired for instead.
+
+### Batch Mailer
+This is an addon class for PHPMailer that I wrote to send large numbers of
+emails in batches.  It's written so that the batches are sent server-side. That
+way, the script will run even if a user browses away from it or the browser
+crashes. It requires the class itself as well as a script placed on the server
+to run the class in a recursive way.  Both are listed here, but will need a bit
+of customization if you wish to use them yourself.
+
+##Media Samples
 
 ### ISPCS Videos
 In 2012 I was tasked with cutting together and producing a series of
